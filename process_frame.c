@@ -14,6 +14,12 @@
 
 OSC_ERR OscVisDrawBoundingBoxBW(struct OSC_PICTURE *picIn, struct OSC_VIS_REGIONS *regions, uint8 Color);
 
+/* Calculates the otsu-value
+ *
+ * @return otsu-value
+ */
+int otsu(void);
+
 void ProcessFrame(uint8 *pInputImg)
 {
 	int c, r;
@@ -23,13 +29,27 @@ void ProcessFrame(uint8 *pInputImg)
 	struct OSC_PICTURE Pic1, Pic2;//we require these structures to use Oscar functions
 	struct OSC_VIS_REGIONS ImgRegions;//these contain the foreground objects
 
+	int ThresholdLocal;
+
+	if(data.ipc.state.nThreshold == 0)
+	{
+		//OscLog(INFO, "%d\n",data.ipc.state.nThreshold);
+		ThresholdLocal = otsu();
+		//OscLog(INFO, "%d\n\n",ThresholdLocal);
+	}
+	else
+	{
+		ThresholdLocal = data.ipc.state.nThreshold;
+
+	}
+
 	/* this is the default case */
 	for(r = 0; r < siz; r+= nc)/* we strongly rely on the fact that them images have the same size */
 	{
 		for(c = 0; c < nc; c++)
 		{
 			/* first determine the foreground estimate */
-			data.u8TempImage[THRESHOLD][r+c] = data.u8TempImage[GRAYSCALE][r+c] < (uint8) data.ipc.state.nThreshold ? 0xff : 0;
+			data.u8TempImage[THRESHOLD][r+c] = data.u8TempImage[GRAYSCALE][r+c] < (uint8) ThresholdLocal ? 0xff : 0;
 		}
 	}
 
@@ -109,5 +129,88 @@ OSC_ERR OscVisDrawBoundingBoxBW(struct OSC_PICTURE *picIn, struct OSC_VIS_REGION
 	 return SUCCESS;
 }
 
+int otsu(void)
+{
+	register int r = 0, c = 0, i = 0;
+	int max = 0;
+	int siz = sizeof(data.u8TempImage[GRAYSCALE]);
+	uint32 hist[255];
+	memset(hist, 0, sizeof(hist));
+	uint32 w0[255];
+	memset(w0, 0, sizeof(w0));
+	uint32 w1[255];
+	memset(w1, 0, sizeof(w1));
+	uint32 m0[255];
+	memset(m0, 0, sizeof(m0));
+	uint32 m1[255];
+	memset(m1, 0, sizeof(m1));
 
+	float sB2[255];
+	memset(sB2, 0, sizeof(sB2));
+
+	float mean[255];
+	memset(mean, 0, sizeof(mean));
+
+	float m0w0[255];
+	memset(m0w0, 0, sizeof(m0w0));
+
+	float m1w1[255];
+	memset(m1w1, 0, sizeof(m1w1));
+
+	uint8 *p = data.u8TempImage[GRAYSCALE];
+
+	// Histogramm berechnen
+	for (r = 0; r < siz; r++) {
+		hist[p[r]] += 1;
+	}
+
+	// Mean Berechnen
+	for (r = 0; r < 256; r++) {
+		mean[r] = hist[r] * r;
+	}
+
+	// Threshold mit otsu berechnen
+	i = 1;
+	for (r = 0; r < 256; r++) {
+
+		// Berechnung von m0, m1, w0, w1
+		for (c = i; c < 256; c++) {
+			w1[r] += hist[c];		// Berechnung w1
+			m1[r] += mean[c];		// Berechnung m1
+		}
+		i++;
+
+		for (c = 0; c <= (r); c++) {
+			m0[r] += mean[c];		// Berechnung m0
+			w0[r] += hist[c];		// Berechnung w0
+		}
+
+		// Berechnung der Divisionen m0/w0, m1/w1
+		if (w0[r] == 0 || w1[r] == 0) {		// Falls ein Divisor = 0, wird Divisor auf 1 gesetzt
+			m0w0[r] = (float) m0[r];
+			m1w1[r] = (float) m1[r];
+		} else {							// Sonst Division mit m0/w0, m1/w1
+			m0w0[r] = (float) m0[r] / w0[r];
+			m1w1[r] = (float) m1[r] / w1[r];
+		}
+
+		// Differenz der beiden Quotienten m0/w0, m1/w1 berechnen
+		sB2[r] = (m0w0[r] - m1w1[r]);
+
+		// Sigma B berechnen (Quotientendifferenz quadrieren und um 24Bit nach rechts schieben, Multiplikation mit w0*w1)
+		sB2[r] = sB2[r] * (m0w0[r] - m1w1[r]) / 16777216 * w0[r] * w1[r];
+
+		// Array-Index suchen, and dem sich das Maximum von Sigma B sich befindet
+		if (r > 0) {
+			if (sB2[r - 1] < sB2[r]) {
+				max = r;
+			}
+		}
+	}
+
+	// Array-Index auf 100 normieren
+	max = (float) max / 255 * 100;
+
+	return max;
+}
 
